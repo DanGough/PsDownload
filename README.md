@@ -21,6 +21,15 @@ This module:
 - Progress bar limited to updating every 250ms to prevent overuse of system resources.
 <br>
 
+## Installation
+
+Install from the [Powershell Gallery](https://www.powershellgallery.com/packages/PsDownload) by running the following command:
+
+```powershell
+Install-Module -Name PsDownload
+```
+<br>
+
 ## Usage
 
 ```powershell
