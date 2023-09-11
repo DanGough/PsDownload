@@ -1,6 +1,7 @@
 # PsDownload
 
 A PowerShell module for downloading files.
+It will be available on the Powershell Gallery soon!
 <br>
 
 ## Why?
