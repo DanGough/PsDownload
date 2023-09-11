@@ -1,8 +1,8 @@
 # PsDownload
 
-A module for downloading files.
+A PowerShell module for downloading files.
 
-
+<br>
 ## Why?
 
 - Invoke-WebRequest requires you to supply the output filename, which you might not know in advance, and it's not always possible to extract it from the URL.
@@ -19,7 +19,7 @@ This module:
 - Modified date will be updated once download has complete to match the Last-Modified header if found.
 - Progress bar limited to updating every 250ms to prevent overuse of system resources.
 
-
+<br>
 ## Usage
 
 ```powershell
@@ -34,6 +34,7 @@ Pipeline input is also supported:
 
 **URI** is also accepted as an alias of **URL**.
 
+<br>
 Optional parameters:
 
 - FileName
@@ -55,7 +56,7 @@ Optional parameters:
 - $PassThru
   - Returns a FileInfo object to the pipeline for the downloaded file.
 
-
+<br>
 ## Issues
 
 This has been tested against a large number of URLs, please submit an issue if it is unable to download a specific file. Note that some URLs load a page that runs some javascript to trigger the actual download. This type of URL is not supported, it must either point directly to the resource or the server will redirect the URL to the resource without the need to execute any client-side scripts.
