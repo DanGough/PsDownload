@@ -14,7 +14,7 @@ A PowerShell module for downloading files.
 
 This module:
 
-- Uses the .NET HttpClient class (which is now recommended for use by Microsoft over the now deprecated WebClient class).
+- Uses the .NET HttpClient class (which is now recommended for use by Microsoft over the now [deprecated WebClient class](https://learn.microsoft.com/en-us/dotnet/core/compatibility/networking/6.0/webrequest-deprecated)).
 - Will attempt to grab the file name from the Content-Disposition header. Headers are obtained by a regular GET request as not all web servers accept HEAD requests. If this header is not present, it will extract the file name from the absolute URL (since the supplied URL may redirect elsewhere).
 - Streams directly to disk rather than holding the entire file in memory.
 - Modified date will be updated once download has complete to match the Last-Modified header if found.
