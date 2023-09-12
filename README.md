@@ -12,13 +12,13 @@ A PowerShell module for downloading files.
 - Start-BitsTransfer can determine the file name automatically, but it does not work for all URLs and is only supported on Windows.
 - Some URLs require different user agents connect successfully.
 
-This module:
+This module solves these problems:
 
-- Uses the .NET HttpClient class (which is now recommended for use by Microsoft over the now [deprecated WebClient class](https://learn.microsoft.com/en-us/dotnet/core/compatibility/networking/6.0/webrequest-deprecated)).
-- Will attempt to grab the file name from the Content-Disposition header. Headers are obtained by a regular GET request as not all web servers accept HEAD requests. If this header is not present, it will extract the file name from the absolute URL (since the supplied URL may redirect elsewhere).
-- Streams directly to disk rather than holding the entire file in memory.
-- Modified date will be updated once download has complete to match the Last-Modified header if found.
-- Progress bar is limited to updating every 250ms to prevent overuse of system resources.
+- It uses the .NET HttpClient class (which is now recommended for use by Microsoft over the now [deprecated WebClient class](https://learn.microsoft.com/en-us/dotnet/core/compatibility/networking/6.0/webrequest-deprecated)).
+- It will first attempt to grab the file name from the Content-Disposition header. Headers are obtained by a regular GET request (as some web servers have been shown to refuse HEAD requests). If this header is not present, it will extract the file name from the absolute URL (since the supplied URL may redirect elsewhere).
+- The file is streamed directly to disk rather than holding it entirely in memory.
+- The modified date will be updated once download has complete to match the Last-Modified header if found.
+- The progress bar is limited to updating every 250ms to prevent overuse of system resources.
 - User agent strings for Chrome and the Googlebot web crawler will be attempted by default.
 <br>
 
