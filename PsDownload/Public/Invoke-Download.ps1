@@ -73,10 +73,11 @@ function Invoke-Download {
                     { $_ -gt 1GB } { '{0:n2} GB' -f ($_ / 1GB); Break }
                     { $_ -gt 1MB } { '{0:n2} MB' -f ($_ / 1MB); Break }
                     { $_ -gt 1KB } { '{0:n2} KB' -f ($_ / 1KB); Break }
-                    default { '{0} B ' -f $_ }
+                    default { '{0} B' -f $_ }
                 }
                 Write-Verbose "File size: $FileSize bytes ($FileSizeReadable)"
-            } catch {
+            }
+            catch {
                 Write-Verbose 'Unable to determine file size'
             }
 
@@ -85,20 +86,23 @@ function Invoke-Download {
                 $LastModified = $null
                 $LastModified = [DateTime]::ParseExact($ResponseHeader.Content.Headers.GetValues('Last-Modified')[0], 'r', [System.Globalization.CultureInfo]::InvariantCulture)
                 Write-Verbose "Last modified: $($LastModified.ToString())"
-            } catch {
+            }
+            catch {
                 Write-Verbose 'Last-Modified header not found'
             }
 
             if ($FileName) {
                 $FileName = $FileName.Trim()
                 Write-Verbose "Will use supplied filename '$FileName'"
-            } else {
+            }
+            else {
                 # Get the file name from the "Content-Disposition" header if available
                 try {
                     $ContentDispositionHeader = $null
                     $ContentDispositionHeader = $ResponseHeader.Content.Headers.GetValues('Content-Disposition')[0]
                     Write-Verbose "Content-Disposition header found: $ContentDispositionHeader"
-                } catch {
+                }
+                catch {
                     Write-Verbose 'Content-Disposition header not found'
                 }
                 if ($ContentDispositionHeader) {
@@ -112,7 +116,8 @@ function Invoke-Download {
                         [IO.Path]::GetinvalidFileNameChars() | ForEach-Object { $FileName = $FileName.Replace($_, ' ') }
                         $FileName = $FileName.Trim()
                         Write-Verbose "Extracted filename '$FileName' from Content-Disposition header"
-                    } else {
+                    }
+                    else {
                         Write-Verbose 'Failed to extract filename from Content-Disposition header'
                     }
                 }
@@ -127,7 +132,8 @@ function Invoke-Download {
                 }
             }
 
-        } else {
+        }
+        else {
             Write-Verbose 'Failed to retrieve headers'
         }
 
@@ -135,7 +141,7 @@ function Invoke-Download {
             # If still no filename set, extract the file name from the original URL.
             # GetFileName ensures we are not getting a full path with slashes. UrlDecode will convert characters like %20 back to spaces. The URL is split with ? to ensure we can strip off any API parameters.
             $FileName = [System.IO.Path]::GetFileName([System.Web.HttpUtility]::UrlDecode($URL.Split('?')[0]))
-            [IO.Path]::GetinvalidFileNameChars() | ForEach-Object { $FileName = $FileName.Replace($_, ' ') }
+            [System.IO.Path]::GetInvalidFileNameChars() | ForEach-Object { $FileName = $FileName.Replace($_, ' ') }
             $FileName = $FileName.Trim()
             Write-Verbose "Extracted filename '$FileName' from original URL '$URL'"
         }
@@ -159,14 +165,16 @@ function Invoke-Download {
                 try {
                     New-Item -Path $Destination -ItemType Directory -Force | Out-Null
                     Write-Verbose "Created temp folder '$TempPath'"
-                } catch {
+                }
+                catch {
                     Write-Error "Unable to create temp folder '$TempPath': $_"
                     return
                 }
             }
 
             # Generate temp file name
-            $TempFile = New-TemporaryFile
+            $TempFileName = (New-Guid).ToString('N') + ".tmp"
+            $TempFilePath = Join-Path $TempPath $TempFileName
 
             # Check Destiation exists and create it if not
             if (-not (Test-Path -LiteralPath $Destination -PathType Container)) {
@@ -174,7 +182,8 @@ function Invoke-Download {
                 try {
                     New-Item -Path $Destination -ItemType Directory -Force | Out-Null
                     Write-Verbose "Created output folder '$Destination'"
-                } catch {
+                }
+                catch {
                     Write-Error "Unable to create output folder '$Destination': $_"
                     return
                 }
@@ -182,14 +191,15 @@ function Invoke-Download {
 
             # Open file stream
             try {
-                $FileStream = [System.IO.File]::Create($TempFile)
-            } catch {
-                Write-Error "Unable to create file '$TempFile': $_"
+                $FileStream = [System.IO.File]::Create($TempFilePath)
+            }
+            catch {
+                Write-Error "Unable to create file '$TempFilePath': $_"
                 return
             }
         
             if ($FileStream.CanWrite) {
-                Write-Verbose "Downloading file to temp file '$TempFile'..."
+                Write-Verbose "Downloading to temp file '$TempFilePath'..."
 
                 $Buffer = New-Object byte[] 16KB
                 $BytesDownloaded = 0
@@ -214,20 +224,21 @@ function Invoke-Download {
                             $FileStream.Dispose()
                             try {
                                 Write-Verbose "Moving temp file to destination '$DestinationFilePath'"
-                                $DownloadedFile = Move-Item $TempFile -Destination $DestinationFilePath -Force -PassThru
-                            } catch {
-                                Write-Error "Error moving file from '$TempFile' to '$DestinationFilePath': $_"
+                                $DownloadedFile = Move-Item -LiteralPath $TempFilePath -Destination $DestinationFilePath -Force -PassThru
+                            }
+                            catch {
+                                Write-Error "Error moving file from '$TempFilePath' to '$DestinationFilePath': $_"
                                 return
                             }
                             if ($IsWindows) {
                                 if ($BlockFile) {
                                     Write-Verbose 'Marking file as downloaded from the internet'
                                     Set-Content -LiteralPath $DownloadedFile -Stream 'Zone.Identifier' -Value "[ZoneTransfer]`nZoneId=3"
-                                } else {
+                                }
+				else {
                                     Unblock-File -LiteralPath $DownloadedFile
                                 }
                             }
-
                             if ($LastModified -and -not $IgnoreDate) {
                                 Write-Verbose 'Setting Last Modified date'
                                 $DownloadedFile.LastWriteTime = $LastModified
@@ -239,7 +250,8 @@ function Invoke-Download {
                             break
                         }
                         $FileStream.Write($Buffer, 0, $ReadBytes)
-                    } catch {
+                    }
+                    catch {
                         Write-Error "Error downloading file: $_"
                         $FileStream.Close()
                         $FileStream.Dispose()
@@ -248,7 +260,8 @@ function Invoke-Download {
                 }
     
             }
-        } else {
+        }
+        else {
             Write-Error 'Failed to start download'
         }
 
