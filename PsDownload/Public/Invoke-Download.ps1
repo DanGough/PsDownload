@@ -4,7 +4,7 @@ function Invoke-Download {
         [Parameter(Position = 0, Mandatory = $true, ValueFromPipeline = $true)]
         [Alias('URI')]
         [ValidateNotNullOrEmpty()]
-        [uri]$URL,
+        [string]$URL,
         
         [Parameter(Position = 1)]
         [ValidateNotNullOrEmpty()]
