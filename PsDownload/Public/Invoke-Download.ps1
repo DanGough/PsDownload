@@ -4,7 +4,7 @@ function Invoke-Download {
         [Parameter(Position = 0, Mandatory = $true, ValueFromPipeline = $true)]
         [Alias('URI')]
         [ValidateNotNullOrEmpty()]
-        [string]$URL,
+        [uri]$URL,
         
         [Parameter(Position = 1)]
         [ValidateNotNullOrEmpty()]
@@ -17,6 +17,10 @@ function Invoke-Download {
 
         [string]$TempPath = [System.IO.Path]::GetTempPath(),
 
+        [string]$Proxy,
+        [pscredential]$ProxyCredential,
+        [switch]$ProxyUseDefaultCredentials,
+    
         [switch]$IgnoreDate,
         [switch]$BlockFile,
         [switch]$NoClobber,
@@ -35,7 +39,24 @@ function Invoke-Download {
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
         # Create one single client object for the pipeline
-        $HttpClient = New-Object System.Net.Http.HttpClient
+        if ($HttpProxy) {    
+            $HttpProxy = New-Object System.Net.WebProxy -ArgumentList $Proxy
+            if ($ProxyCredential) {
+                $HttpProxy.Credentials = $ProxyCredential
+            }
+            if ($ProxyUseDefaultCredentials) {
+                $HttpProxy.UseDefaultCredentials = $true
+            }
+
+            $HttpClientHandler = New-Object System.Net.Http.HttpClientHandler
+            $HttpClientHandler.Proxy = $HttpProxy
+
+            $HttpClient = New-Object System.Net.Http.HttpClient -ArgumentList $HttpClientHandler
+        }
+        else {
+            $HttpClient = New-Object System.Net.Http.HttpClient
+        }
+
     }
 
     process {
@@ -242,7 +263,7 @@ function Invoke-Download {
                                     Write-Verbose 'Marking file as downloaded from the internet'
                                     Set-Content -LiteralPath $DownloadedFile -Stream 'Zone.Identifier' -Value "[ZoneTransfer]`nZoneId=3"
                                 }
-				else {
+                                else {
                                     Unblock-File -LiteralPath $DownloadedFile
                                 }
                             }
