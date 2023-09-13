@@ -201,25 +201,32 @@ function Invoke-Download {
             if ($FileStream.CanWrite) {
                 Write-Verbose "Downloading to temp file '$TempFilePath'..."
 
-                $Buffer = New-Object byte[] 16KB
+                $Buffer = New-Object byte[] 64KB
                 $BytesDownloaded = 0
-                $ProgressTimer = Get-Date
                 $ProgressIntervalMs = 250
+                $ProgressTimer = (Get-Date).AddMilliseconds(-$ProgressIntervalMs)
 
                 while ($true) {
                     try {
                         # Read stream into buffer
                         $ReadBytes = $ResponseStream.Read($Buffer, 0, $Buffer.Length)
 
-                        # Track bytes downloaded for progress bar
+                        # Track bytes downloaded and display progress bar if enabled and file size is known
                         $BytesDownloaded += $ReadBytes
                         if (!$NoProgress -and (Get-Date) -gt $ProgressTimer.AddMilliseconds($ProgressIntervalMs)) {
-                            Write-Progress -Activity 'Downloading File' -Status $FileName -PercentComplete ($BytesDownloaded / $FileSize * 100)
+                            if ($FileSize) {
+                                $PercentComplete = [System.Math]::Floor($BytesDownloaded / $FileSize * 100)
+                                Write-Progress -Activity "Downloading $FileName" -Status "$BytesDownloaded of $FileSize bytes ($PercentComplete%)" -PercentComplete $PercentComplete
+                            }
+                            else {
+                                Write-Progress -Activity "Downloading $FileName" -Status "$BytesDownloaded of ? bytes" -PercentComplete 0
+                            }
                             $ProgressTimer = Get-Date
                         }
 
                         # If end of stream
                         if ($ReadBytes -eq 0) {
+                            Write-Progress -Activity "Downloading $FileName" -Completed
                             $FileStream.Close()
                             $FileStream.Dispose()
                             try {
@@ -253,6 +260,7 @@ function Invoke-Download {
                     }
                     catch {
                         Write-Error "Error downloading file: $_"
+                        Write-Progress -Activity "Downloading $FileName" -Completed
                         $FileStream.Close()
                         $FileStream.Dispose()
                         break
