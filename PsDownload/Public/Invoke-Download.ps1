@@ -14,7 +14,7 @@ function Invoke-Download {
         [string]$FileName,
 
         [string[]]$UserAgent = @('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36', 'Googlebot/2.1 (+http://www.google.com/bot.html)'),
-
+        [hashtable]$Headers = @{accept = '*/*'},
         [string]$TempPath = [System.IO.Path]::GetTempPath(),
 
         [switch]$IgnoreDate,
@@ -36,6 +36,10 @@ function Invoke-Download {
 
         # Create one single client object for the pipeline
         $HttpClient = New-Object System.Net.Http.HttpClient
+
+        foreach ($Header in $Headers.GetEnumerator()) {
+            $HttpClient.DefaultRequestHeaders.Add($Header.Key, $Header.Value)
+        }
     }
 
     process {
