@@ -34,8 +34,16 @@ Install-Module -Name PsDownload
 ## Usage
 
 ```powershell
-Invoke-Download -URL "https://aka.ms/vs/17/release/VC_redist.x64.exe" -Destination "$env:USERPROFILE\Downloads"
+Resolve-Uri "https://aka.ms/vs/17/release/VC_redist.x64.exe"
 ```
+
+This will return the absolute URI (the redirected URI), as well as the filename, file size and last modified date if available from the response headers.
+
+```powershell
+Invoke-Download -Uri "https://aka.ms/vs/17/release/VC_redist.x64.exe" -Destination "$env:USERPROFILE\Downloads"
+```
+
+This will download the file to the Downloads folder.
 
 Pipeline input is also supported:
 
@@ -43,7 +51,7 @@ Pipeline input is also supported:
 "https://aka.ms/vs/17/release/VC_redist.x64.exe","https://aka.ms/vs/17/release/VC_redist.x86.exe" | Invoke-Download -Destination "$env:USERPROFILE\Downloads"
 ```
 
-**URI** is also accepted as an alias of **URL**.
+**URL** is also accepted as an alias of **URI**.
 <br>
 
 Optional parameters:
@@ -54,6 +62,8 @@ Optional parameters:
   - Override the default user agent. By default it will cycle through using:
     - Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36
     - Googlebot/2.1 (+http://www.google.com/bot.html)
+- Headers
+  - Default is @{'accept' = '*/*'}, which is needed to trick some servers into serving a download, such as from FileZilla.
 - TempPath
   - By default the download in progress will be saved to %TEMP% / $env:TEMP.
 - IgnoreDate
