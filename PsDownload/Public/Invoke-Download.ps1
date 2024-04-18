@@ -134,7 +134,7 @@ function Invoke-Download {
                 break
             }
             else {
-                throw "$($MyInvocation.MyCommand): $($ResponseStream.Exception.InnerException.Message)"
+                continue
             }
         }
 
