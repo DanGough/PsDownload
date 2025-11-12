@@ -61,7 +61,9 @@ function Resolve-Uri {
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
         # Create one single client object for the pipeline
-        $HttpClient = New-Object System.Net.Http.HttpClient
+        $HttpClientHandler = [System.Net.Http.HttpClientHandler]::new()
+        $HttpClientHandler.AutomaticDecompression = [System.Net.DecompressionMethods]::GZip -bor [System.Net.DecompressionMethods]::Deflate
+        $HttpClient = [System.Net.Http.HttpClient]::new($HttpClientHandler)
 
         if ($null -ne $Headers) {
             foreach ($Header in $Headers.GetEnumerator()) {
