@@ -87,7 +87,9 @@ function Invoke-Download {
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
         # Create one single client object for the pipeline
-        $HttpClient = New-Object System.Net.Http.HttpClient
+        $HttpClientHandler = [System.Net.Http.HttpClientHandler]::new()
+        $HttpClientHandler.AutomaticDecompression = [System.Net.DecompressionMethods]::GZip -bor [System.Net.DecompressionMethods]::Deflate
+        $HttpClient = [System.Net.Http.HttpClient]::new($HttpClientHandler)
 
         foreach ($Header in $Headers.GetEnumerator()) {
             $HttpClient.DefaultRequestHeaders.Add($Header.Key, $Header.Value)
