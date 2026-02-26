@@ -38,6 +38,9 @@ If specified, the function will not display a progress bar during the download.
 .PARAMETER PassThru
 If specified, the function will return the downloaded file object.
 
+.PARAMETER TimeoutSeconds
+Maximum number of seconds to allow for URI resolution and download. If exceeded, the function throws a terminating timeout error with diagnostic details.
+
 .EXAMPLE
 Invoke-Download -Uri 'https://example.com/file.txt' -Destination 'C:\Downloads'
 
@@ -51,31 +54,34 @@ function Invoke-Download {
         [Alias('Url')]
         [ValidateNotNullOrEmpty()]
         [string]$Uri,
-        
+
         [Parameter(Position = 1)]
         [ValidateNotNullOrEmpty()]
         [string]$Destination = $PWD.Path,
-        
+
         [Parameter(Position = 2)]
         [string]$FileName,
 
         [string[]]$UserAgent = @($null, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36', 'Googlebot/2.1 (+http://www.google.com/bot.html)'),
-        
+
         [hashtable]$Headers = @{accept = '*/*' },
-        
+
         [string]$TempPath = [System.IO.Path]::GetTempPath(),
-        
+
         [switch]$IgnoreDate,
-        
+
         [switch]$BlockFile,
-        
+
         [switch]$NoClobber,
-        
+
         [switch]$NoProgress,
-        
-        [switch]$PassThru
-    )	
-	
+
+        [switch]$PassThru,
+
+        [ValidateRange(1, 86400)]
+        [int]$TimeoutSeconds = 3600
+    )
+
     begin {
         # Required on Windows Powershell only
         if ($PSEdition -eq 'Desktop') {
@@ -90,6 +96,8 @@ function Invoke-Download {
         $HttpClientHandler = [System.Net.Http.HttpClientHandler]::new()
         $HttpClientHandler.AutomaticDecompression = [System.Net.DecompressionMethods]::GZip -bor [System.Net.DecompressionMethods]::Deflate
         $HttpClient = [System.Net.Http.HttpClient]::new($HttpClientHandler)
+        # Use cancellation tokens for timeout control instead of HttpClient's internal timeout.
+        $HttpClient.Timeout = [System.Threading.Timeout]::InfiniteTimeSpan
 
         foreach ($Header in $Headers.GetEnumerator()) {
             $HttpClient.DefaultRequestHeaders.Add($Header.Key, $Header.Value)
@@ -98,12 +106,23 @@ function Invoke-Download {
 
     process {
 
-        $ResolveUriSplat = @{
-            Uri       = $Uri
-            UserAgent = $UserAgent
-            Headers   = $Headers
-        }
-        $Properties = Resolve-Uri @ResolveUriSplat -ErrorAction Stop
+        $Response = $null
+        $ResponseStream = $null
+        $FileStream = $null
+        $TempFilePath = $null
+        $DownloadedFile = $null
+
+        $Timeout = [System.TimeSpan]::FromSeconds($TimeoutSeconds)
+        $CancellationTokenSource = [System.Threading.CancellationTokenSource]::new($Timeout)
+        $Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+
+        try {
+            $ResolveUriSplat = @{
+                Uri       = $Uri
+                UserAgent = $UserAgent
+                Headers   = $Headers
+            }
+            $Properties = Resolve-Uri @ResolveUriSplat -ErrorAction Stop
 
         if ([string]::IsNullOrEmpty($FileName)) {
             if ([string]::IsNullOrEmpty($Properties.FileName)) {
@@ -123,6 +142,49 @@ function Invoke-Download {
             return
         }
 
+        function Throw-InvokeDownloadTimeout {
+            param(
+                [string]$Stage,
+                [System.Exception]$InnerException
+            )
+
+            Write-Progress -Activity "Downloading $FileName" -Completed
+
+            if ($FileStream) {
+                $FileStream.Dispose()
+                $FileStream = $null
+            }
+
+            if ($ResponseStream) {
+                $ResponseStream.Dispose()
+                $ResponseStream = $null
+            }
+
+            if ($Response) {
+                $Response.Dispose()
+                $Response = $null
+            }
+
+            if ($TempFilePath -and (Test-Path -LiteralPath $TempFilePath -PathType Leaf)) {
+                Remove-Item -LiteralPath $TempFilePath -Force -ErrorAction SilentlyContinue
+            }
+
+            $errorData = [ordered]@{
+                Uri                 = $Uri
+                DestinationFilePath = $DestinationFilePath
+                TempFilePath        = $TempFilePath
+                TimeoutSeconds      = $TimeoutSeconds
+                ElapsedSeconds      = [Math]::Round($Stopwatch.Elapsed.TotalSeconds, 2)
+                Stage               = $Stage
+            }
+
+            $message = "$($MyInvocation.MyCommand): Timeout exceeded while processing '$Uri'. Details: $($errorData | ConvertTo-Json -Compress)"
+            $timeoutException = [System.TimeoutException]::new($message, $InnerException)
+            $errorRecord = [System.Management.Automation.ErrorRecord]::new($timeoutException, 'InvokeDownload.Timeout', [System.Management.Automation.ErrorCategory]::OperationTimeout, $Uri)
+            $errorRecord.ErrorDetails = [System.Management.Automation.ErrorDetails]::new($message)
+            $PSCmdlet.ThrowTerminatingError($errorRecord)
+        }
+
         foreach ($UserAgentString in $UserAgent) {
             $HttpClient.DefaultRequestHeaders.Remove('User-Agent') | Out-Null
             if ($UserAgentString) {
@@ -130,25 +192,67 @@ function Invoke-Download {
                 $HttpClient.DefaultRequestHeaders.Add('User-Agent', $UserAgentString)
             }
 
-            $ResponseStream = $HttpClient.GetStreamAsync($Uri)
+            try {
+                $Response = $HttpClient.GetAsync($Uri, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead, $CancellationTokenSource.Token).GetAwaiter().GetResult()
+            }
+            catch [System.OperationCanceledException] {
+                if ($CancellationTokenSource.IsCancellationRequested) {
+                    Throw-InvokeDownloadTimeout -Stage 'requesting response stream' -InnerException $_.Exception
+                }
 
-            if ($ResponseStream.Result.CanRead) {
+                throw
+            }
+
+            if ($Response.IsSuccessStatusCode) {
                 break
             }
             else {
+                $Response.Dispose()
+                $Response = $null
                 continue
             }
         }
 
-        if (!$ResponseStream.Result.CanRead) {
-            throw "$($MyInvocation.MyCommand): $($ResponseStream.Exception.InnerException.Message)"
+        if (-not $Response) {
+            throw "$($MyInvocation.MyCommand): no successful response was received from '$Uri'"
+        }
+
+        try {
+            if ($PSEdition -eq 'Desktop') {
+                # .NET Framework HttpContent does not expose ReadAsStreamAsync(CancellationToken)
+                $remainingMs = [int][Math]::Ceiling(($Timeout - $Stopwatch.Elapsed).TotalMilliseconds)
+                if ($remainingMs -le 0) {
+                    Throw-InvokeDownloadTimeout -Stage 'opening response stream' -InnerException ([System.TimeoutException]::new("Timeout reached before opening response stream"))
+                }
+
+                $readAsStreamTask = $Response.Content.ReadAsStreamAsync()
+                if (-not $readAsStreamTask.Wait($remainingMs)) {
+                    Throw-InvokeDownloadTimeout -Stage 'opening response stream' -InnerException ([System.TimeoutException]::new("Timeout exceeded while opening response stream"))
+                }
+
+                $ResponseStream = $readAsStreamTask.GetAwaiter().GetResult()
+            }
+            else {
+                $ResponseStream = $Response.Content.ReadAsStreamAsync($CancellationTokenSource.Token).GetAwaiter().GetResult()
+            }
+        }
+        catch [System.OperationCanceledException] {
+            if ($CancellationTokenSource.IsCancellationRequested) {
+                Throw-InvokeDownloadTimeout -Stage 'opening response stream' -InnerException $_.Exception
+            }
+
+            throw
+        }
+
+        if (!$ResponseStream.CanRead) {
+            throw "$($MyInvocation.MyCommand): The response stream for '$Uri' is not readable"
         }
 
         # Check TempPath exists and create it if not
         if (-not (Test-Path -LiteralPath $TempPath -PathType Container)) {
             Write-Verbose "$($MyInvocation.MyCommand): Temp folder '$TempPath' does not exist"
             try {
-                New-Item -LiteralPath $Destination -ItemType Directory -Force | Out-Null
+                New-Item -LiteralPath $TempPath -ItemType Directory -Force | Out-Null
                 Write-Verbose "$($MyInvocation.MyCommand): Created temp folder '$TempPath'"
             }
             catch {
@@ -156,11 +260,11 @@ function Invoke-Download {
                 return
             }
         }
-        
+
         # Generate temp file name
         $TempFileName = (New-Guid).ToString('N') + ".tmp"
         $TempFilePath = Join-Path $TempPath $TempFileName
-        
+
         # Check Destination exists and create it if not
         if (-not (Test-Path -LiteralPath $Destination -PathType Container)) {
             Write-Verbose "$($MyInvocation.MyCommand): Output folder '$Destination' does not exist"
@@ -173,7 +277,7 @@ function Invoke-Download {
                 return
             }
         }
-        
+
         # Open file stream
         try {
             $FileStream = [System.IO.File]::Create($TempFilePath)
@@ -182,20 +286,20 @@ function Invoke-Download {
             Write-Error "$($MyInvocation.MyCommand): Unable to create file '$TempFilePath': $_"
             return
         }
-                
+
         if ($FileStream.CanWrite) {
             Write-Verbose "$($MyInvocation.MyCommand): Downloading to temp file '$TempFilePath'..."
-        
+
             $Buffer = New-Object byte[] 64KB
             $BytesDownloaded = 0
             $ProgressIntervalMs = 250
             $ProgressTimer = (Get-Date).AddMilliseconds(-$ProgressIntervalMs)
-        
+
             while ($true) {
                 try {
                     # Read stream into buffer
-                    $ReadBytes = $ResponseStream.Result.Read($Buffer, 0, $Buffer.Length)
-        
+                    $ReadBytes = $ResponseStream.ReadAsync($Buffer, 0, $Buffer.Length, $CancellationTokenSource.Token).GetAwaiter().GetResult()
+
                     # Track bytes downloaded and display progress bar if enabled and file size is known
                     $BytesDownloaded += $ReadBytes
                     if (!$NoProgress -and (Get-Date) -gt $ProgressTimer.AddMilliseconds($ProgressIntervalMs)) {
@@ -208,12 +312,13 @@ function Invoke-Download {
                         }
                         $ProgressTimer = Get-Date
                     }
-        
+
                     # If end of stream
                     if ($ReadBytes -eq 0) {
                         Write-Progress -Activity "Downloading $FileName" -Completed
                         $FileStream.Close()
                         $FileStream.Dispose()
+                        $FileStream = $null
                         try {
                             Write-Verbose "$($MyInvocation.MyCommand): Moving temp file to destination '$DestinationFilePath'"
                             $DownloadedFile = Move-Item -LiteralPath $TempFilePath -Destination $DestinationFilePath -Force -PassThru
@@ -243,15 +348,46 @@ function Invoke-Download {
                     }
                     $FileStream.Write($Buffer, 0, $ReadBytes)
                 }
+                catch [System.OperationCanceledException] {
+                    if ($CancellationTokenSource.IsCancellationRequested) {
+                        Throw-InvokeDownloadTimeout -Stage 'downloading file content' -InnerException $_.Exception
+                    }
+
+                    throw
+                }
                 catch {
                     Write-Error "$($MyInvocation.MyCommand): Error downloading file: $_"
                     Write-Progress -Activity "Downloading $FileName" -Completed
-                    $FileStream.Close()
-                    $FileStream.Dispose()
+                    if ($FileStream) {
+                        $FileStream.Close()
+                        $FileStream.Dispose()
+                        $FileStream = $null
+                    }
                     break
                 }
             }
-            
+        }
+        }
+        finally {
+            $Stopwatch.Stop()
+
+            if ($FileStream) {
+                $FileStream.Dispose()
+            }
+
+            if ($ResponseStream) {
+                $ResponseStream.Dispose()
+            }
+
+            if ($Response) {
+                $Response.Dispose()
+            }
+
+            $CancellationTokenSource.Dispose()
+
+            if ($TempFilePath -and -not $DownloadedFile -and (Test-Path -LiteralPath $TempFilePath -PathType Leaf)) {
+                Remove-Item -LiteralPath $TempFilePath -Force -ErrorAction SilentlyContinue
+            }
         }
 
     }

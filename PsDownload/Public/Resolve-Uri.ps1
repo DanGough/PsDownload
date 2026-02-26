@@ -14,6 +14,9 @@ The user agent string to use for the request. By default, it uses two user agent
 .PARAMETER Headers
 Additional headers to include in the request. Default is @{'accept' = '*/*'}, which is needed to trick some servers into serving a download, such as from FileZilla.
 
+.PARAMETER TimeoutSeconds
+Maximum number of seconds to wait for URI resolution. If the timeout is exceeded, the function throws a terminating timeout error with diagnostic details.
+
 .OUTPUTS
 The function outputs a custom object with the following properties:
 - Uri: The original URL.
@@ -46,10 +49,13 @@ function Resolve-Uri {
         [string]$Uri,
 
         [string[]]$UserAgent = @($null, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36', 'Googlebot/2.1 (+http://www.google.com/bot.html)'),
-        
-        [hashtable]$Headers = @{accept = '*/*' }
-    )	
-	
+
+        [hashtable]$Headers = @{accept = '*/*' },
+
+        [ValidateRange(1, 86400)]
+        [int]$TimeoutSeconds = 60
+    )
+
     begin {
         # Required on Windows Powershell only
         if ($PSEdition -eq 'Desktop') {
@@ -64,6 +70,8 @@ function Resolve-Uri {
         $HttpClientHandler = [System.Net.Http.HttpClientHandler]::new()
         $HttpClientHandler.AutomaticDecompression = [System.Net.DecompressionMethods]::GZip -bor [System.Net.DecompressionMethods]::Deflate
         $HttpClient = [System.Net.Http.HttpClient]::new($HttpClientHandler)
+        # Use cancellation tokens for timeout control instead of HttpClient's internal timeout.
+        $HttpClient.Timeout = [System.Threading.Timeout]::InfiniteTimeSpan
 
         if ($null -ne $Headers) {
             foreach ($Header in $Headers.GetEnumerator()) {
@@ -76,25 +84,50 @@ function Resolve-Uri {
     process {
 
         # Reset variables
-        $FileName = $AbsoluteUri = $FileSizeBytes = $FileSizeReadable = $LastModified = $null
+        $FileName = $FileSizeBytes = $FileSizeReadable = $LastModified = $null
 
         Write-Verbose "$($MyInvocation.MyCommand): Requesting headers from URL '$Uri'"
 
-        foreach ($UserAgentString in $UserAgent) {
-            $HttpClient.DefaultRequestHeaders.Remove('User-Agent') | Out-Null
-            if ($UserAgentString) {
-                Write-Verbose "$($MyInvocation.MyCommand): Using UserAgent '$UserAgentString'"
-                $HttpClient.DefaultRequestHeaders.Add('User-Agent', $UserAgentString)
-            }
+        $Timeout = [System.TimeSpan]::FromSeconds($TimeoutSeconds)
+        $CancellationTokenSource = [System.Threading.CancellationTokenSource]::new($Timeout)
+        $Stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+        $ResponseHeader = $null
 
-            # This sends a GET request but only retrieves the headers
-            $ResponseHeader = $HttpClient.GetAsync($Uri, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).Result
+        try {
+            foreach ($UserAgentString in $UserAgent) {
+                $HttpClient.DefaultRequestHeaders.Remove('User-Agent') | Out-Null
+                if ($UserAgentString) {
+                    Write-Verbose "$($MyInvocation.MyCommand): Using UserAgent '$UserAgentString'"
+                    $HttpClient.DefaultRequestHeaders.Add('User-Agent', $UserAgentString)
+                }
 
-            # Exit the foreach if success
-            if ($ResponseHeader.IsSuccessStatusCode) {
-                break
+                # This sends a GET request but only retrieves the headers
+                try {
+                    $ResponseHeader = $HttpClient.GetAsync($Uri, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead, $CancellationTokenSource.Token).GetAwaiter().GetResult()
+                }
+                catch [System.OperationCanceledException] {
+                    if ($CancellationTokenSource.IsCancellationRequested) {
+                        $errorData = [ordered]@{
+                            Uri            = $Uri
+                            TimeoutSeconds = $TimeoutSeconds
+                            ElapsedSeconds = [Math]::Round($Stopwatch.Elapsed.TotalSeconds, 2)
+                            Stage          = 'requesting response headers'
+                        }
+                        $message = "$($MyInvocation.MyCommand): Timeout exceeded while resolving '$Uri'. Details: $($errorData | ConvertTo-Json -Compress)"
+                        $timeoutException = [System.TimeoutException]::new($message, $_.Exception)
+                        $errorRecord = [System.Management.Automation.ErrorRecord]::new($timeoutException, 'ResolveUri.Timeout', [System.Management.Automation.ErrorCategory]::OperationTimeout, $Uri)
+                        $errorRecord.ErrorDetails = [System.Management.Automation.ErrorDetails]::new($message)
+                        $PSCmdlet.ThrowTerminatingError($errorRecord)
+                    }
+
+                    throw
+                }
+
+                # Exit the foreach if success
+                if ($ResponseHeader.IsSuccessStatusCode) {
+                    break
+                }
             }
-        }
 
         if ($ResponseHeader.IsSuccessStatusCode) {
             Write-Verbose "$($MyInvocation.MyCommand): Successfully retrieved headers"
@@ -105,7 +138,7 @@ function Resolve-Uri {
 
             try {
                 $FileSizeBytes = $null
-                $FileSizeBytes = [int]$ResponseHeader.Content.Headers.GetValues('Content-Length')[0]
+                $FileSizeBytes = [long]$ResponseHeader.Content.Headers.GetValues('Content-Length')[0]
                 $FileSizeReadable = switch ($FileSizeBytes) {
                     { $_ -gt 1TB } { '{0:n2} TB' -f ($_ / 1TB); Break }
                     { $_ -gt 1GB } { '{0:n2} GB' -f ($_ / 1GB); Break }
@@ -159,7 +192,7 @@ function Resolve-Uri {
                         Write-Verbose "$($MyInvocation.MyCommand): Failed to extract filename from Content-Disposition header"
                     }
                 }
-    
+
                 if ([string]::IsNullOrEmpty($FileName)) {
                     # If failed to parse Content-Disposition header or if it's not available, extract the file name from the absolute URL to capture any redirections.
                     # GetFileName ensures we are not getting a full path with slashes. UrlDecode will convert characters like %20 back to spaces. The URL is split with ? to ensure we can strip off any API parameters.
@@ -172,7 +205,11 @@ function Resolve-Uri {
 
         }
         else {
-            throw "$($MyInvocation.MyCommand): Failed to retrieve headers from $($Uri): $([int]$ResponseHeader.StatusCode): $($ResponseHeader.ReasonPhrase)"
+            if ($ResponseHeader) {
+                throw "$($MyInvocation.MyCommand): Failed to retrieve headers from $($Uri): $([int]$ResponseHeader.StatusCode): $($ResponseHeader.ReasonPhrase)"
+            }
+
+            throw "$($MyInvocation.MyCommand): Failed to retrieve headers from $($Uri): no response was received"
         }
 
         if ([string]::IsNullOrEmpty($FileName)) {
@@ -184,13 +221,21 @@ function Resolve-Uri {
             Write-Verbose "$($MyInvocation.MyCommand): Extracted filename '$FileName' from original URL '$Uri'"
         }
 
-        [PSCustomObject]@{
-            Uri              = $Uri
-            AbsoluteUri      = $ResponseHeader.RequestMessage.RequestUri.AbsoluteUri
-            FileName         = $FileName
-            FileSizeBytes    = $FileSizeBytes
-            FileSizeReadable = $FileSizeReadable
-            LastModified     = $LastModified
+            [PSCustomObject]@{
+                Uri              = $Uri
+                AbsoluteUri      = $ResponseHeader.RequestMessage.RequestUri.AbsoluteUri
+                FileName         = $FileName
+                FileSizeBytes    = $FileSizeBytes
+                FileSizeReadable = $FileSizeReadable
+                LastModified     = $LastModified
+            }
+        }
+        finally {
+            $Stopwatch.Stop()
+            $CancellationTokenSource.Dispose()
+            if ($ResponseHeader) {
+                $ResponseHeader.Dispose()
+            }
         }
 
     }
