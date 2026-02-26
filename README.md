@@ -40,10 +40,22 @@ Resolve-Uri "https://aka.ms/vs/17/release/VC_redist.x64.exe"
 This will return the absolute URI (the redirected URI), as well as the filename, file size and last modified date if available from the response headers.
 
 ```powershell
+Resolve-Uri "https://aka.ms/vs/17/release/VC_redist.x64.exe" -TimeoutSeconds 15
+```
+
+Use `TimeoutSeconds` to limit how long URI resolution is allowed to take (default: 60 seconds).
+
+```powershell
 Invoke-Download -Uri "https://aka.ms/vs/17/release/VC_redist.x64.exe" -Destination "$env:USERPROFILE\Downloads"
 ```
 
 This will download the file to the Downloads folder.
+
+```powershell
+Invoke-Download -Uri "https://aka.ms/vs/17/release/VC_redist.x64.exe" -Destination "$env:USERPROFILE\Downloads" -TimeoutSeconds 1800
+```
+
+Use `TimeoutSeconds` to limit how long the download stage is allowed to run (default: 3600 seconds).
 
 Pipeline input is also supported:
 
@@ -76,6 +88,9 @@ Optional parameters:
   - Suppress progress bar.
 - PassThru
   - Returns a FileInfo object to the pipeline for the downloaded file.
+- TimeoutSeconds
+  - Maximum time allowed for `Invoke-Download` to complete before a terminating timeout error is thrown (default: 3600 seconds).
+  - `Resolve-Uri` also supports `TimeoutSeconds` for URI resolution (default: 60 seconds).
 <br>
 
 ## Issues
