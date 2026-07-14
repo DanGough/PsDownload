@@ -368,6 +368,12 @@ function Invoke-Download {
             }
         }
         }
+        catch {
+            # A terminating error in process skips the end block, so dispose the
+            # reused HttpClient here to avoid leaking its socket/connection pool.
+            if ($HttpClient) { $HttpClient.Dispose() }
+            throw
+        }
         finally {
             $Stopwatch.Stop()
 
@@ -393,6 +399,6 @@ function Invoke-Download {
     }
 
     end {
-        $HttpClient.Dispose()
+        if ($HttpClient) { $HttpClient.Dispose() }
     }
 }

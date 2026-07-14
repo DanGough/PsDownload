@@ -155,11 +155,8 @@ function Resolve-Uri {
                 Write-Verbose "$($MyInvocation.MyCommand): Last-Modified header not found"
             }
 
-            # Some servers (for example those using chunked transfer encoding) do not return a
-            # Content-Length header on a normal request. A ranged request for the first byte often
-            # reveals the total file size via the Content-Range header without downloading the entire
-            # file. This is only useful for the file size: in practice a server that omits the
-            # Last-Modified header on a normal request omits it on a ranged request too.
+            # Some servers do not return a Content-Length header on a normal request.
+            # A ranged request for the first byte often reveals the total file size via the Content-Range header without downloading the entire file.
             if ($null -eq $FileSizeBytes) {
                 Write-Verbose "$($MyInvocation.MyCommand): File size unavailable from initial response, attempting ranged request"
                 $RangeRequest = $null
@@ -285,6 +282,12 @@ function Resolve-Uri {
                 LastModified     = $LastModified
             }
         }
+        catch {
+            # A terminating error in process skips the end block, so dispose the
+            # reused HttpClient here to avoid leaking its socket/connection pool.
+            if ($HttpClient) { $HttpClient.Dispose() }
+            throw
+        }
         finally {
             $Stopwatch.Stop()
             $CancellationTokenSource.Dispose()
@@ -296,6 +299,6 @@ function Resolve-Uri {
     }
 
     end {
-        $HttpClient.Dispose()
+        if ($HttpClient) { $HttpClient.Dispose() }
     }
 }
