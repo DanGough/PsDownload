@@ -139,17 +139,10 @@ function Resolve-Uri {
             try {
                 $FileSizeBytes = $null
                 $FileSizeBytes = [long]$ResponseHeader.Content.Headers.GetValues('Content-Length')[0]
-                $FileSizeReadable = switch ($FileSizeBytes) {
-                    { $_ -gt 1TB } { '{0:n2} TB' -f ($_ / 1TB); Break }
-                    { $_ -gt 1GB } { '{0:n2} GB' -f ($_ / 1GB); Break }
-                    { $_ -gt 1MB } { '{0:n2} MB' -f ($_ / 1MB); Break }
-                    { $_ -gt 1KB } { '{0:n2} KB' -f ($_ / 1KB); Break }
-                    default { '{0} B' -f $_ }
-                }
-                Write-Verbose "$($MyInvocation.MyCommand): File size: $FileSizeBytes bytes ($FileSizeReadable)"
+                Write-Verbose "$($MyInvocation.MyCommand): File size from Content-Length header: $FileSizeBytes bytes"
             }
             catch {
-                Write-Verbose "$($MyInvocation.MyCommand): Unable to determine file size"
+                Write-Verbose "$($MyInvocation.MyCommand): Unable to determine file size from Content-Length header"
             }
 
             # Try to get the last modified date from the "Last-Modified" header, use error handling in case string is in invalid format
@@ -160,6 +153,68 @@ function Resolve-Uri {
             }
             catch {
                 Write-Verbose "$($MyInvocation.MyCommand): Last-Modified header not found"
+            }
+
+            # Some servers (for example those using chunked transfer encoding) do not return a
+            # Content-Length header on a normal request. A ranged request for the first byte often
+            # reveals the total file size via the Content-Range header without downloading the entire
+            # file. This is only useful for the file size: in practice a server that omits the
+            # Last-Modified header on a normal request omits it on a ranged request too.
+            if ($null -eq $FileSizeBytes) {
+                Write-Verbose "$($MyInvocation.MyCommand): File size unavailable from initial response, attempting ranged request"
+                $RangeRequest = $null
+                $RangeResponse = $null
+                try {
+                    $RangeRequest = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Get, $ResponseHeader.RequestMessage.RequestUri)
+                    $RangeRequest.Headers.Range = [System.Net.Http.Headers.RangeHeaderValue]::new(0, 0)
+                    $RangeResponse = $HttpClient.SendAsync($RangeRequest, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead, $CancellationTokenSource.Token).GetAwaiter().GetResult()
+
+                    if ($RangeResponse.StatusCode -eq [System.Net.HttpStatusCode]::PartialContent) {
+                        if ($null -ne $RangeResponse.Content.Headers.ContentRange -and $RangeResponse.Content.Headers.ContentRange.HasLength) {
+                            $FileSizeBytes = [long]$RangeResponse.Content.Headers.ContentRange.Length
+                            Write-Verbose "$($MyInvocation.MyCommand): File size from Content-Range header: $FileSizeBytes bytes"
+                        }
+                    }
+                    else {
+                        Write-Verbose "$($MyInvocation.MyCommand): Ranged request did not return partial content (status $([int]$RangeResponse.StatusCode))"
+                    }
+                }
+                catch [System.OperationCanceledException] {
+                    if ($CancellationTokenSource.IsCancellationRequested) {
+                        $errorData = [ordered]@{
+                            Uri            = $Uri
+                            TimeoutSeconds = $TimeoutSeconds
+                            ElapsedSeconds = [Math]::Round($Stopwatch.Elapsed.TotalSeconds, 2)
+                            Stage          = 'requesting ranged response headers'
+                        }
+                        $message = "$($MyInvocation.MyCommand): Timeout exceeded while resolving '$Uri'. Details: $($errorData | ConvertTo-Json -Compress)"
+                        $timeoutException = [System.TimeoutException]::new($message, $_.Exception)
+                        $errorRecord = [System.Management.Automation.ErrorRecord]::new($timeoutException, 'ResolveUri.Timeout', [System.Management.Automation.ErrorCategory]::OperationTimeout, $Uri)
+                        $errorRecord.ErrorDetails = [System.Management.Automation.ErrorDetails]::new($message)
+                        $PSCmdlet.ThrowTerminatingError($errorRecord)
+                    }
+
+                    throw
+                }
+                catch {
+                    Write-Verbose "$($MyInvocation.MyCommand): Ranged request failed: $_"
+                }
+                finally {
+                    if ($RangeRequest) { $RangeRequest.Dispose() }
+                    if ($RangeResponse) { $RangeResponse.Dispose() }
+                }
+            }
+
+            # Format a human-readable file size once the size has been determined by whichever method
+            if ($null -ne $FileSizeBytes) {
+                $FileSizeReadable = switch ($FileSizeBytes) {
+                    { $_ -gt 1TB } { '{0:n2} TB' -f ($_ / 1TB); Break }
+                    { $_ -gt 1GB } { '{0:n2} GB' -f ($_ / 1GB); Break }
+                    { $_ -gt 1MB } { '{0:n2} MB' -f ($_ / 1MB); Break }
+                    { $_ -gt 1KB } { '{0:n2} KB' -f ($_ / 1KB); Break }
+                    default { '{0} B' -f $_ }
+                }
+                Write-Verbose "$($MyInvocation.MyCommand): File size: $FileSizeBytes bytes ($FileSizeReadable)"
             }
 
             if ($FileName) {
